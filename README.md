@@ -734,6 +734,9 @@ Both tools require a `provider` parameter (`'browserstack'`, `'saucelabs'`, `'te
 | `execute_script`         | Execute arbitrary JavaScript in the browser, or Appium mobile commands on devices                                                                                                                      |
 | `execute_electron_script` | Execute privileged JavaScript in the Electron main process (Electron sessions only)                                                                                                                   |
 | `trigger_electron_deeplink` | Trigger an Electron deeplink whose scheme was explicitly configured at session start                                                                                                                 |
+| `mock_electron_api` | Configure a session-scoped Electron API function mock |
+| `get_electron_mock_calls` | Inspect current Electron mock call arguments |
+| `manage_electron_mock` | Clear, reset, or restore an Electron function mock |
 | `switch_tab`             | Switch to a different browser tab by handle or 0-based index. Browser-only.                                                                                                                            |
 | `switch_frame`           | Switch into an iframe by CSS/XPath selector, or back to the top-level frame if no selector is given. Browser-only.                                                                                     |
 
@@ -892,7 +895,20 @@ start_session({
 execute_electron_script({ script: 'return electron.app.getName()' })
 ```
 
-Existing browser DOM tools work against the Electron renderer. `close_session` always tears down MCP-managed Electron sessions; `detach: true` is intentionally unsupported. Main/renderer log capture can be enabled with `captureMainProcessLogs` or `captureRendererLogs` plus `logDir`. Electron mocks are not exposed yet.
+Existing browser DOM tools work against the Electron renderer. `close_session` always tears down MCP-managed Electron sessions; `detach: true` is intentionally unsupported. Main/renderer log capture can be enabled with `captureMainProcessLogs` or `captureRendererLogs` plus `logDir`. Electron function mocks are available through `mock_electron_api`, `get_electron_mock_calls`, and `manage_electron_mock`.
+
+```js
+mock_electron_api({
+  apiName: 'dialog', funcName: 'showOpenDialog',
+  behavior: 'mockResolvedValue', value: { canceled: false, filePaths: ['/tmp/example.txt'] }
+})
+// Interact with the renderer to open the application's file picker, then inspect its calls.
+get_electron_mock_calls({ apiName: 'dialog', funcName: 'showOpenDialog' })
+manage_electron_mock({ apiName: 'dialog', funcName: 'showOpenDialog', action: 'restore' })
+```
+
+`behavior` defaults to `mockReturnValue`; `mockResolvedValue` and `mockRejectedValue` support async APIs. Each has a `Once` variant for queued responses. Repeated configuration preserves the existing mock and call history. Values must be JSON; omit `value` for `undefined`. `clear` removes call history, `reset` also removes behavior and queued responses, and `restore` reinstates the original function. Handles belong to the active browser session and cannot be reused after it closes or is replaced. These tools support individual API functions; class mocks and arbitrary mock implementations are not exposed. All three tools participate in tracing and generated replay.
+
 
 To trigger an app deeplink, explicitly configure its URI scheme when starting the Electron session. The scheme has no colon and only URLs with that exact scheme can be dispatched:
 

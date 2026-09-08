@@ -472,3 +472,45 @@ describe('generateCode - Electron', () => {
     expect(code).toContain('Recorded Electron deeplink must use "${electronDeeplinkScheme}:".');
   });
 });
+
+describe('generateCode - Electron mocks', () => {
+  it('executes repeated configuration, inspection, reset, restore, and recreation in order', async () => {
+    const target = { apiName: 'app', funcName: 'getName' };
+    const history = makeHistory([
+      { tool: 'mock_electron_api', params: { ...target, value: 'default' } },
+      { tool: 'mock_electron_api', params: { ...target, behavior: 'mockReturnValueOnce', value: 'once' } },
+      { tool: 'get_electron_mock_calls', params: target },
+      { tool: 'manage_electron_mock', params: { ...target, action: 'clear' } },
+      { tool: 'manage_electron_mock', params: { ...target, action: 'reset' } },
+      { tool: 'manage_electron_mock', params: { ...target, action: 'restore' } },
+      { tool: 'mock_electron_api', params: target },
+    ]);
+    history.runtime = 'electron';
+    history.steps[0].params = { platform: 'electron' };
+    const events: unknown[] = [];
+    const mock = {
+      mockReturnValue: async (value: unknown) => { events.push(['return', value]); },
+      mockReturnValueOnce: async (value: unknown) => { events.push(['once', value]); },
+      update: async () => { events.push('update'); },
+      mockClear: async () => { events.push('clear'); },
+      mockReset: async () => { events.push('reset'); },
+      mockRestore: async () => { events.push('restore'); },
+      mock: { calls: [['argument']] },
+    };
+    const browser = {
+      electron: { mock: async (...args: unknown[]) => { events.push(args); return mock; } },
+      deleteSession: async () => { events.push('delete'); },
+    };
+    const code = generateCode(history).replace(/^import .*;\n/m, '');
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    await new AsyncFunction('startWdioSession', 'cleanupWdioSession', 'console', code)(
+      async () => browser,
+      async () => { events.push('cleanup'); },
+      { log: (value: unknown) => events.push(value) },
+    );
+    expect(events).toEqual([
+      ['app', 'getName'], ['return', 'default'], ['once', 'once'], 'update', [['argument']],
+      'clear', 'reset', 'restore', ['app', 'getName'], ['return', undefined], 'cleanup', 'delete',
+    ]);
+  });
+});
