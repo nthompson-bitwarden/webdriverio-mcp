@@ -21,6 +21,7 @@ type ElectronMock = Record<z.infer<typeof behaviorSchema>, (value: unknown) => P
 };
 // Browser ownership keeps handles isolated and lets teardown release them without another cleanup hook.
 const sessionMocks = new WeakMap<WebdriverIO.Browser, Map<string, ElectronMock>>();
+const sessionOperations = new WeakMap<WebdriverIO.Browser, Map<string, Promise<void>>>();
 const keyFor = ({ apiName, funcName }: Target) => JSON.stringify([apiName, funcName]);
 
 function context(target: Target) {
@@ -34,7 +35,22 @@ function context(target: Target) {
   if (!electron?.mock) throw new Error('Electron mocking support is unavailable for this session.');
   let mocks = sessionMocks.get(browser);
   if (!mocks) { mocks = new Map(); sessionMocks.set(browser, mocks); }
-  return { electron, mocks, key: keyFor(target) };
+  return { browser, electron, mocks, key: keyFor(target) };
+}
+
+function withTarget<T>(target: Target, operation: (ctx: ReturnType<typeof context>) => Promise<T>): Promise<T> {
+  const ctx = context(target);
+  let operations = sessionOperations.get(ctx.browser);
+  if (!operations) { operations = new Map(); sessionOperations.set(ctx.browser, operations); }
+  // Capture the browser now and serialize the entire operation, including restore and inspection.
+  const result = (operations.get(ctx.key) ?? Promise.resolve()).then(() => operation(ctx));
+  const cleanup = () => {
+    if (operations.get(ctx.key) === tail) operations.delete(ctx.key);
+  };
+  // A failed operation must not prevent later retries from running.
+  const tail = result.then(cleanup, cleanup);
+  operations.set(ctx.key, tail);
+  return result;
 }
 
 function errorResult(error: unknown) {
@@ -50,15 +66,16 @@ export const mockElectronApiToolDefinition: ToolDefinition = {
 export const mockElectronApiTool: ToolCallback = async (args: MockArgs) => {
   try {
     const behavior = behaviorSchema.parse(args.behavior ?? 'mockReturnValue');
-    const { electron, mocks, key } = context(args);
-    let mock = mocks.get(key);
-    if (!mock) {
-      mock = await electron.mock(args.apiName, args.funcName);
-      // Retain immediately so a failed configuration can still be restored or retried.
-      mocks.set(key, mock);
-    }
-    await mock[behavior](args.value);
-    return { content: [{ type: 'text', text: `Electron mock configured: ${args.apiName}.${args.funcName} (${behavior})` }] };
+    return await withTarget(args, async ({ electron, mocks, key }) => {
+      let mock = mocks.get(key);
+      if (!mock) {
+        mock = await electron.mock(args.apiName, args.funcName);
+        // Retain immediately so a failed configuration can still be restored or retried.
+        mocks.set(key, mock);
+      }
+      await mock[behavior](args.value);
+      return { content: [{ type: 'text' as const, text: `Electron mock configured: ${args.apiName}.${args.funcName} (${behavior})` }] };
+    });
   } catch (error) { return errorResult(error); }
 };
 
@@ -70,11 +87,12 @@ export const getElectronMockCallsToolDefinition: ToolDefinition = {
 };
 export const getElectronMockCallsTool: ToolCallback = async (args: Target) => {
   try {
-    const { mocks, key } = context(args);
-    const mock = mocks.get(key);
-    if (!mock) throw new Error('mock not found; call mock_electron_api first.');
-    await mock.update();
-    return { content: [{ type: 'text', text: JSON.stringify({ calls: mock.mock.calls, callCount: mock.mock.calls.length }) }] };
+    return await withTarget(args, async ({ mocks, key }) => {
+      const mock = mocks.get(key);
+      if (!mock) throw new Error('mock not found; call mock_electron_api first.');
+      await mock.update();
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ calls: mock.mock.calls, callCount: mock.mock.calls.length }) }] };
+    });
   } catch (error) { return errorResult(error); }
 };
 
@@ -87,12 +105,13 @@ export const manageElectronMockToolDefinition: ToolDefinition = {
 export const manageElectronMockTool: ToolCallback = async (args: ManageArgs) => {
   try {
     const action = actionSchema.parse(args.action);
-    const { mocks, key } = context(args);
-    const mock = mocks.get(key);
-    if (!mock) throw new Error('mock not found; call mock_electron_api first.');
-    const method = { clear: 'mockClear', reset: 'mockReset', restore: 'mockRestore' } as const;
-    await mock[method[action]]();
-    if (action === 'restore') mocks.delete(key);
-    return { content: [{ type: 'text', text: `Electron mock ${action} completed: ${args.apiName}.${args.funcName}` }] };
+    return await withTarget(args, async ({ mocks, key }) => {
+      const mock = mocks.get(key);
+      if (!mock) throw new Error('mock not found; call mock_electron_api first.');
+      const method = { clear: 'mockClear', reset: 'mockReset', restore: 'mockRestore' } as const;
+      await mock[method[action]]();
+      if (action === 'restore') mocks.delete(key);
+      return { content: [{ type: 'text' as const, text: `Electron mock ${action} completed: ${args.apiName}.${args.funcName}` }] };
+    });
   } catch (error) { return errorResult(error); }
 };

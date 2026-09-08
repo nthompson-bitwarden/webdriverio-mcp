@@ -8,6 +8,15 @@ const configure = mockElectronApiTool as unknown as TestTool;
 const inspect = getElectronMockCallsTool as unknown as TestTool;
 const manage = manageElectronMockTool as unknown as TestTool;
 const target = { apiName: 'dialog', funcName: 'showOpenDialog' };
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 function session(id = 'electron') {
   const mock = {
     mockReturnValue: vi.fn(), mockReturnValueOnce: vi.fn(), mockResolvedValue: vi.fn(),
@@ -28,6 +37,78 @@ beforeEach(() => {
 });
 
 describe('Electron mocks', () => {
+  it('creates one handle and preserves once-value order for overlapping configurations', async () => {
+    const { mock, create } = session();
+    const creation = deferred<typeof mock>();
+    const started = deferred<void>();
+    create.mockImplementationOnce(() => { started.resolve(); return creation.promise; });
+    const first = configure({ ...target, behavior: 'mockReturnValueOnce', value: 'first' });
+    await started.promise;
+    const second = configure({ ...target, behavior: 'mockReturnValueOnce', value: 'second' });
+    creation.resolve(mock);
+    const results = await Promise.all([first, second]);
+    expect(results.every(result => !result.isError)).toBe(true);
+    expect(create).toHaveBeenCalledOnce();
+    expect(mock.mockReturnValueOnce.mock.calls).toEqual([['first'], ['second']]);
+  });
+
+  it('allows a queued request to retry failed creation', async () => {
+    const { create } = session();
+    const creation = deferred<never>();
+    const started = deferred<void>();
+    create.mockImplementationOnce(() => { started.resolve(); return creation.promise; });
+    const first = configure(target);
+    await started.promise;
+    const second = configure(target);
+    creation.reject(new Error('creation failed'));
+    expect((await first).isError).toBe(true);
+    expect((await second).isError).toBeUndefined();
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('sequences inspection and restoration after configuration, then recreates the handle', async () => {
+    const { mock, create } = session();
+    const configuration = deferred<void>();
+    const started = deferred<void>();
+    const events: string[] = [];
+    mock.mockReturnValue.mockImplementationOnce(async () => {
+      started.resolve();
+      await configuration.promise;
+      events.push('configured');
+    }).mockImplementationOnce(() => { events.push('reconfigured'); });
+    mock.update.mockImplementation(() => { events.push('inspected'); });
+    mock.mockRestore.mockImplementation(() => { events.push('restored'); });
+    const first = configure(target);
+    await started.promise;
+    const inspection = inspect(target);
+    const restoration = manage({ ...target, action: 'restore' });
+    const second = configure(target);
+    configuration.resolve();
+    const results = await Promise.all([first, inspection, restoration, second]);
+    expect(results.every(result => !result.isError)).toBe(true);
+    expect(events).toEqual(['configured', 'inspected', 'restored', 'reconfigured']);
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not block another target or a replacement browser during pending creation', async () => {
+    const { mock, create } = session();
+    const creation = deferred<typeof mock>();
+    const started = deferred<void>();
+    create.mockImplementationOnce(() => { started.resolve(); return creation.promise; });
+    const pending = configure(target);
+    await started.promise;
+    expect((await configure({ apiName: 'app', funcName: 'getName' })).isError).toBeUndefined();
+    const replacement = session();
+    expect((await configure(target)).isError).toBeUndefined();
+    creation.resolve(mock);
+    expect((await pending).isError).toBeUndefined();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(replacement.create).toHaveBeenCalledOnce();
+    await inspect(target);
+    expect(replacement.mock.update).toHaveBeenCalledOnce();
+    expect(mock.update).not.toHaveBeenCalled();
+  });
+
   it.each(['mockReturnValue', 'mockReturnValueOnce', 'mockResolvedValue', 'mockResolvedValueOnce', 'mockRejectedValue', 'mockRejectedValueOnce'])('delegates %s', async behavior => {
     const { mock, create } = session();
     expect((await configure({ ...target, behavior, value: { canceled: true } })).isError).toBeUndefined();
