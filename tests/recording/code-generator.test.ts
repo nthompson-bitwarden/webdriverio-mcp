@@ -474,16 +474,32 @@ describe('generateCode - Electron', () => {
 });
 
 describe('generateCode - Electron mocks', () => {
+  it.each(['mock', 'get_mock_calls', 'manage_mock'])('does not replay unsupported %s kinds as Electron operations', async tool => {
+    const history = makeHistory([{ tool, params: { kind: 'network', action: 'restore' } }]);
+    history.runtime = 'electron';
+    history.steps[0].params = { platform: 'electron' };
+    const code = generateCode(history).replace(/^import .*;\n/m, '');
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    let cleaned = false;
+    let deleted = false;
+    await expect(new AsyncFunction('startWdioSession', 'cleanupWdioSession', code)(
+      async () => ({ deleteSession: async () => { deleted = true; } }),
+      async () => { cleaned = true; },
+    )).rejects.toThrow('Unsupported recorded mock kind');
+    expect(cleaned).toBe(true);
+    expect(deleted).toBe(true);
+  });
+
   it('executes repeated configuration, inspection, reset, restore, and recreation in order', async () => {
-    const target = { apiName: 'app', funcName: 'getName' };
+    const target = { kind: 'electron', apiName: 'app', funcName: 'getName' };
     const history = makeHistory([
-      { tool: 'mock_electron_api', params: { ...target, value: 'default' } },
-      { tool: 'mock_electron_api', params: { ...target, behavior: 'mockReturnValueOnce', value: 'once' } },
-      { tool: 'get_electron_mock_calls', params: target },
-      { tool: 'manage_electron_mock', params: { ...target, action: 'clear' } },
-      { tool: 'manage_electron_mock', params: { ...target, action: 'reset' } },
-      { tool: 'manage_electron_mock', params: { ...target, action: 'restore' } },
-      { tool: 'mock_electron_api', params: target },
+      { tool: 'mock', params: { ...target, value: 'default' } },
+      { tool: 'mock', params: { ...target, behavior: 'mockReturnValueOnce', value: 'once' } },
+      { tool: 'get_mock_calls', params: target },
+      { tool: 'manage_mock', params: { ...target, action: 'clear' } },
+      { tool: 'manage_mock', params: { ...target, action: 'reset' } },
+      { tool: 'manage_mock', params: { ...target, action: 'restore' } },
+      { tool: 'mock', params: target },
     ]);
     history.runtime = 'electron';
     history.steps[0].params = { platform: 'electron' };

@@ -23,7 +23,7 @@ describe('mapToolToTraceAction', () => {
   });
 
   it('maps all expected tools without returning null', () => {
-    const mapped = ['navigate', 'click_element', 'set_value', 'scroll', 'tap_element', 'swipe', 'drag_and_drop', 'execute_script', 'execute_electron_script', 'trigger_electron_deeplink', 'mock_electron_api', 'get_electron_mock_calls', 'manage_electron_mock', 'launch_chrome'];
+    const mapped = ['navigate', 'click_element', 'set_value', 'scroll', 'tap_element', 'swipe', 'drag_and_drop', 'execute_script', 'execute_electron_script', 'trigger_electron_deeplink', 'mock', 'get_mock_calls', 'manage_mock', 'launch_chrome'];
     for (const tool of mapped) {
       expect(mapToolToTraceAction(tool), `expected ${tool} to be mapped`).not.toBeNull();
     }

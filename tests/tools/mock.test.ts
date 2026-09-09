@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { getState } from '../../src/session/state';
-import { mockElectronApiTool, mockElectronApiToolDefinition, getElectronMockCallsTool, manageElectronMockTool } from '../../src/tools/electron-mock.tool';
+import { mockTool, mockToolDefinition, getMockCallsTool, manageMockTool } from '../../src/tools/mock.tool';
 
-type TestTool = (args: Record<string, unknown>) => ReturnType<typeof mockElectronApiTool>;
-const configure = mockElectronApiTool as unknown as TestTool;
-const inspect = getElectronMockCallsTool as unknown as TestTool;
-const manage = manageElectronMockTool as unknown as TestTool;
-const target = { apiName: 'dialog', funcName: 'showOpenDialog' };
+type TestTool = (args: Record<string, unknown>) => ReturnType<typeof mockTool>;
+const configure = mockTool as unknown as TestTool;
+const inspect = getMockCallsTool as unknown as TestTool;
+const manage = manageMockTool as unknown as TestTool;
+const target = { kind: 'electron', apiName: 'dialog', funcName: 'showOpenDialog' };
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: Error) => void;
@@ -37,6 +37,40 @@ beforeEach(() => {
 });
 
 describe('Electron mocks', () => {
+  it.each([
+    ['configure', configure, {}],
+    ['inspect', inspect, {}],
+    ['manage', manage, { action: 'restore' }],
+  ] as const)('rejects network %s without touching Electron mocks in any runtime', async (_name, tool, extra) => {
+    const { create, mock } = session();
+    await configure(target);
+    for (const runtime of ['electron', 'webdriver'] as const) {
+      getState().sessionMetadata.get('electron')!.runtime = runtime;
+      const result = await tool({ kind: 'network', ...extra });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: 'text', text: expect.stringContaining('Network mocking is not implemented yet') }]);
+    }
+    expect(create).toHaveBeenCalledOnce();
+    expect(mock.update).not.toHaveBeenCalled();
+    expect(mock.mockRestore).not.toHaveBeenCalled();
+  });
+
+  it('requires an explicit kind and a complete Electron target before service calls', async () => {
+    const { create } = session();
+    for (const args of [
+      { apiName: 'app', funcName: 'getName' },
+      { ...target, kind: 'unknown' },
+      { kind: 'electron' },
+      { kind: 'electron', apiName: 'app' },
+      { kind: 'electron', funcName: 'getName' },
+    ]) {
+      expect((await configure(args)).isError).toBe(true);
+      expect((await inspect(args)).isError).toBe(true);
+      expect((await manage({ ...args, action: 'restore' })).isError).toBe(true);
+    }
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('creates one handle and preserves once-value order for overlapping configurations', async () => {
     const { mock, create } = session();
     const creation = deferred<typeof mock>();
@@ -97,7 +131,7 @@ describe('Electron mocks', () => {
     create.mockImplementationOnce(() => { started.resolve(); return creation.promise; });
     const pending = configure(target);
     await started.promise;
-    expect((await configure({ apiName: 'app', funcName: 'getName' })).isError).toBeUndefined();
+    expect((await configure({ kind: 'electron', apiName: 'app', funcName: 'getName' })).isError).toBeUndefined();
     const replacement = session();
     expect((await configure(target)).isError).toBeUndefined();
     creation.resolve(mock);
@@ -198,8 +232,11 @@ describe('Electron mocks', () => {
   });
 
   it('validates the public schema before accepting malformed targets or behavior', () => {
-    const schema = z.object(mockElectronApiToolDefinition.inputSchema);
+    const schema = z.object(mockToolDefinition.inputSchema);
     expect(schema.safeParse({ ...target, value: null }).success).toBe(true);
+    expect(schema.safeParse({ kind: 'network' }).success).toBe(true);
+    expect(schema.safeParse({ apiName: 'app', funcName: 'getName' }).success).toBe(false);
+    expect(schema.safeParse({ ...target, kind: 'unknown' }).success).toBe(false);
     expect(schema.safeParse({ ...target, behavior: 'mockImplementation' }).success).toBe(false);
     expect(schema.safeParse({ ...target, apiName: '__proto__' }).success).toBe(false);
     expect(schema.safeParse({ ...target, funcName: '' }).success).toBe(false);
