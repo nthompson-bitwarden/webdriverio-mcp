@@ -21,6 +21,24 @@ describe('LocalAppiumProvider', () => {
     expect(caps.platformName).toBe('Android');
   });
 
+  it('builds iOS capabilities for lowercase schema value', () => {
+    const caps = localAppiumProvider.buildCapabilities({
+      platform: 'ios',
+      deviceName: 'iPhone 15',
+      appPath: '/path/to/app.app',
+    });
+    expect(caps.platformName).toBe('iOS');
+  });
+
+  it('builds Android capabilities for lowercase schema value', () => {
+    const caps = localAppiumProvider.buildCapabilities({
+      platform: 'android',
+      deviceName: 'Pixel 7',
+      appPath: '/path/to/app.apk',
+    });
+    expect(caps.platformName).toBe('Android');
+  });
+
   it('getSessionType returns ios for iOS', () => {
     expect(localAppiumProvider.getSessionType({ platform: 'iOS' })).toBe('ios');
   });

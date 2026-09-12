@@ -31,6 +31,7 @@ export interface GetMobileElementsOptions {
   includeContainers?: boolean;
   includeBounds?: boolean;
   filterOptions?: FilterOptions;
+  automationName?: string;
 }
 
 /**
@@ -128,6 +129,9 @@ export async function getMobileVisibleElements(
   options: GetMobileElementsOptions = {},
 ): Promise<MobileElementInfo[]> {
   const { includeContainers = false, includeBounds = false, filterOptions } = options;
+  const automationName =
+    options.automationName ??
+    (browser.capabilities as Record<string, unknown> | undefined)?.['appium:automationName'] as string | undefined;
 
   const viewportSize = await getViewportSize(browser);
   const pageSource = await browser.getPageSource();
@@ -139,6 +143,7 @@ export async function getMobileVisibleElements(
 
   const elements = generateAllElementLocators(pageSource, {
     platform,
+    automationName,
     viewportSize,
     filters,
   });

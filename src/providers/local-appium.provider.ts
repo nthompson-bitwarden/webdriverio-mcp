@@ -2,7 +2,7 @@ import type { SessionProvider, ConnectionConfig } from './types';
 import { buildIOSCapabilities, buildAndroidCapabilities, getAppiumServerConfig } from '../config/appium.config';
 
 export type LocalAppiumOptions = {
-  platform: 'iOS' | 'Android';
+  platform: 'ios' | 'android';
   appPath?: string;
   deviceName: string;
   platformVersion?: string;
@@ -47,7 +47,7 @@ export class LocalAppiumProvider implements SessionProvider {
     const appWaitActivity = options.appWaitActivity as string | undefined;
     const userCapabilities = (options.capabilities as Record<string, unknown> | undefined) ?? {};
 
-    const capabilities: Record<string, any> = platform === 'iOS'
+    const capabilities: Record<string, any> = platform.toLowerCase() === 'ios'
       ? buildIOSCapabilities(appPath, {
         deviceName,
         platformVersion,

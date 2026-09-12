@@ -102,6 +102,7 @@ export interface ElementWithLocators {
 
 export interface GenerateLocatorsOptions {
   platform: 'android' | 'ios';
+  automationName?: string;
   viewportSize?: { width: number; height: number };
   filters?: FilterOptions;
   isNative?: boolean;

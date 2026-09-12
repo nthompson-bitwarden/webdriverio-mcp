@@ -209,7 +209,7 @@ export function generateAllElementLocators(
   const ctx: ProcessingContext = {
     sourceXML,
     platform: options.platform,
-    automationName: options.platform === 'android' ? 'uiautomator2' : 'xcuitest',
+    automationName: options.automationName ?? (options.platform === 'android' ? 'uiautomator2' : 'xcuitest'),
     isNative: options.isNative ?? true,
     viewportSize: options.viewportSize ?? { width: 9999, height: 9999 },
     filters: options.filters ?? {},
