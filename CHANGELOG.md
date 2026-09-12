@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.12.1](https://github.com/webdriverio/mcp/compare/v3.12.0...v3.12.1) (2026-09-12)
+
+### Features
+
+* Enhance automationName handling and add lowercase platform support in LocalAppiumProvider ([4b61fce](https://github.com/webdriverio/mcp/commit/4b61fcef2e9c6f77d47afdbd07778f2b8f3fa357))
+
 ## [3.12.0](https://github.com/webdriverio/mcp/compare/v3.11.1...v3.12.0) (2026-09-04)
 
 ### Features
