@@ -7,15 +7,15 @@ const electronTargetSchema = {
   apiName: z.string().regex(/^[A-Za-z][A-Za-z0-9]*$/).describe('Electron API module, such as dialog, app, or clipboard.'),
   funcName: z.string().regex(/^[A-Za-z][A-Za-z0-9]*$/).describe('API function, such as showOpenDialog or getName.'),
 };
-const kindSchema = z.enum(['electron', 'network']);
+const mockTypeSchema = z.enum(['electron', 'browser']);
 const targetSchema = {
-  kind: kindSchema.describe('Mock kind. Electron API function mocks are supported; network mocks are not implemented yet.'),
-  apiName: electronTargetSchema.apiName.optional().describe('Required for kind electron: API module, such as dialog, app, or clipboard.'),
-  funcName: electronTargetSchema.funcName.optional().describe('Required for kind electron: API function, such as showOpenDialog or getName.'),
+  mockType: mockTypeSchema.optional().describe('Mock type: electron or browser. Defaults to browser in WebDriver sessions; required in Electron sessions. Browser mocking is not implemented yet. Appium sessions are unsupported.'),
+  apiName: electronTargetSchema.apiName.optional().describe('Required for mockType electron: API module, such as dialog, app, or clipboard.'),
+  funcName: electronTargetSchema.funcName.optional().describe('Required for mockType electron: API function, such as showOpenDialog or getName.'),
 };
 const behaviorSchema = z.enum(['mockReturnValue', 'mockReturnValueOnce', 'mockResolvedValue', 'mockResolvedValueOnce', 'mockRejectedValue', 'mockRejectedValueOnce']);
 const actionSchema = z.enum(['clear', 'reset', 'restore']);
-type Target = { kind: z.infer<typeof kindSchema>; apiName?: string; funcName?: string };
+type Target = { mockType?: z.infer<typeof mockTypeSchema>; apiName?: string; funcName?: string };
 type MockArgs = Target & { behavior?: z.infer<typeof behaviorSchema>; value?: unknown };
 type ManageArgs = Target & { action: z.infer<typeof actionSchema> };
 type ElectronMock = Record<z.infer<typeof behaviorSchema>, (value: unknown) => Promise<unknown>> & {
@@ -31,14 +31,20 @@ const sessionOperations = new WeakMap<WebdriverIO.Browser, Map<string, Promise<v
 const keyFor = ({ apiName, funcName }: { apiName: string; funcName: string }) => JSON.stringify([apiName, funcName]);
 
 function context(target: Target) {
-  kindSchema.parse(target.kind);
-  if (target.kind === 'network') throw new Error('Network mocking is not implemented yet. Only kind "electron" is currently supported.');
-  const electronTarget = z.object(electronTargetSchema).parse(target);
+  const selector = mockTypeSchema.optional().parse(target.mockType);
   const state = getState();
-  if (!state.currentSession || state.sessionMetadata.get(state.currentSession)?.runtime !== 'electron') {
-    throw new Error('no active Electron session.');
-  }
+  if (!state.currentSession) throw new Error('No active session.');
+  const metadata = state.sessionMetadata.get(state.currentSession);
+  if (!metadata) throw new Error('Active session metadata is unavailable.');
   const browser = getBrowser();
+  if (metadata.type !== 'browser') throw new Error('Mocking is unsupported for iOS/Android Appium sessions.');
+  if (metadata.runtime === 'electron' && selector === undefined) {
+    throw new Error('mockType is required in Electron sessions; choose "electron" or "browser".');
+  }
+  const mockType = selector ?? 'browser';
+  if (mockType === 'browser') throw new Error('Browser mocking is not implemented yet.');
+  if (metadata.runtime !== 'electron') throw new Error('Electron mocking requires an active Electron session.');
+  const electronTarget = z.object(electronTargetSchema).parse(target);
   const electron = (browser as WebdriverIO.Browser & { electron?: { mock(apiName: string, funcName: string): Promise<ElectronMock> } }).electron;
   if (!electron?.mock) throw new Error('Electron mocking support is unavailable for this session.');
   let mocks = sessionMocks.get(browser);
@@ -67,7 +73,7 @@ function errorResult(error: unknown) {
 
 export const mockToolDefinition: ToolDefinition = {
   name: 'mock',
-  description: 'Configure a session-scoped mock of the explicit kind. Currently supports kind electron for main-process API functions in Electron sessions; kind network returns an unsupported error. Electron mocks require apiName and funcName. Repeated calls preserve history and queued once values. Use resolved/rejected behaviors for async APIs.',
+  description: 'Configure a session-scoped mock. mockType defaults to browser in WebDriver sessions and is required in Electron sessions. Browser mocking is not implemented yet; Appium sessions are unsupported. Electron mocks require apiName and funcName. Repeated calls preserve history and queued once values. Use resolved/rejected behaviors for async APIs.',
   annotations: { title: 'Configure Mock', destructiveHint: true },
   inputSchema: { ...targetSchema, behavior: behaviorSchema.optional().describe('Default: mockReturnValue. Once behaviors queue a value for the next call.'), value: z.json().optional().describe('JSON value to return, resolve, or reject with. Omit for undefined.') },
 };
@@ -89,7 +95,7 @@ export const mockTool: ToolCallback = async (args: MockArgs) => {
 
 export const getMockCallsToolDefinition: ToolDefinition = {
   name: 'get_mock_calls',
-  description: 'Read current call arguments for a mock in the active session. Specify kind and the same target used by mock. Only kind electron is supported and requires apiName and funcName; network mocking is not implemented yet.',
+  description: 'Read current call arguments for a mock in the active session. Use the same target as mock. mockType defaults to browser in WebDriver sessions and is required in Electron sessions. Electron mocks require apiName and funcName. Browser mocking is not implemented yet; Appium sessions are unsupported.',
   annotations: { title: 'Get Mock Calls', readOnlyHint: true },
   inputSchema: targetSchema,
 };
@@ -106,7 +112,7 @@ export const getMockCallsTool: ToolCallback = async (args: Target) => {
 
 export const manageMockToolDefinition: ToolDefinition = {
   name: 'manage_mock',
-  description: 'Manage a mock in the active session. Only kind electron is supported and requires apiName and funcName; network mocking is not implemented yet. For Electron: clear removes call history, reset also removes configured behavior and queued values, restore reinstates the original function and releases the mock.',
+  description: 'Manage a mock in the active session. mockType defaults to browser in WebDriver sessions and is required in Electron sessions. Electron mocks require apiName and funcName. Browser mocking is not implemented yet; Appium sessions are unsupported. For Electron: clear removes call history, reset also removes configured behavior and queued values, restore reinstates the original function and releases the mock.',
   annotations: { title: 'Manage Mock', destructiveHint: true },
   inputSchema: { ...targetSchema, action: actionSchema },
 };

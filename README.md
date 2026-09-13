@@ -899,15 +899,15 @@ Existing browser DOM tools work against the Electron renderer. `close_session` a
 
 ```js
 mock({
-  kind: 'electron', apiName: 'dialog', funcName: 'showOpenDialog',
+  mockType: 'electron', apiName: 'dialog', funcName: 'showOpenDialog',
   behavior: 'mockResolvedValue', value: { canceled: false, filePaths: ['/tmp/example.txt'] }
 })
 // Interact with the renderer to open the application's file picker, then inspect its calls.
-get_mock_calls({ kind: 'electron', apiName: 'dialog', funcName: 'showOpenDialog' })
-manage_mock({ kind: 'electron', apiName: 'dialog', funcName: 'showOpenDialog', action: 'restore' })
+get_mock_calls({ mockType: 'electron', apiName: 'dialog', funcName: 'showOpenDialog' })
+manage_mock({ mockType: 'electron', apiName: 'dialog', funcName: 'showOpenDialog', action: 'restore' })
 ```
 
-`kind` is required on all three tools. Use `kind: 'electron'` with `apiName` and `funcName` to target an Electron main-process API function; an active Electron session is required. `kind: 'network'` is reserved for browser network mocking and currently returns an explicit unsupported error in every session. The kind is explicit because Electron sessions may eventually support both function and network mocks.
+`mockType` accepts `'electron'` or `'browser'`. WebDriver browser sessions default to `'browser'` when omitted. Electron sessions require an explicit selection because they can target both types of mocks. Use `mockType: 'electron'` with `apiName` and `funcName` for main-process API functions in an active Electron session. Browser mocking is not implemented yet and returns a clear error for either runtime. iOS/Android Appium sessions do not support mocking.
 
 `behavior` defaults to `mockReturnValue`; `mockResolvedValue` and `mockRejectedValue` support async APIs. Each has a `Once` variant for queued responses. Repeated configuration preserves the existing mock and call history. Values must be JSON; omit `value` for `undefined`. `clear` removes call history, `reset` also removes behavior and queued responses, and `restore` reinstates the original function. Handles belong to the active browser session and cannot be reused after it closes or is replaced. These tools support individual API functions; class mocks and arbitrary mock implementations are not exposed. All three tools participate in tracing and generated replay.
 

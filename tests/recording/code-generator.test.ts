@@ -474,8 +474,8 @@ describe('generateCode - Electron', () => {
 });
 
 describe('generateCode - Electron mocks', () => {
-  it.each(['mock', 'get_mock_calls', 'manage_mock'])('does not replay unsupported %s kinds as Electron operations', async tool => {
-    const history = makeHistory([{ tool, params: { kind: 'network', action: 'restore' } }]);
+  it.each(['mock', 'get_mock_calls', 'manage_mock'].flatMap(tool => [undefined, 'browser', 'unknown'].map(mockType => ({ tool, mockType }))))('rejects recorded $tool with selector $mockType', async ({ tool, mockType }) => {
+    const history = makeHistory([{ tool, params: { mockType, action: 'restore' } }]);
     history.runtime = 'electron';
     history.steps[0].params = { platform: 'electron' };
     const code = generateCode(history).replace(/^import .*;\n/m, '');
@@ -485,13 +485,13 @@ describe('generateCode - Electron mocks', () => {
     await expect(new AsyncFunction('startWdioSession', 'cleanupWdioSession', code)(
       async () => ({ deleteSession: async () => { deleted = true; } }),
       async () => { cleaned = true; },
-    )).rejects.toThrow('Unsupported recorded mock kind');
+    )).rejects.toThrow('Unsupported or missing recorded mockType');
     expect(cleaned).toBe(true);
     expect(deleted).toBe(true);
   });
 
   it('executes repeated configuration, inspection, reset, restore, and recreation in order', async () => {
-    const target = { kind: 'electron', apiName: 'app', funcName: 'getName' };
+    const target = { mockType: 'electron', apiName: 'app', funcName: 'getName' };
     const history = makeHistory([
       { tool: 'mock', params: { ...target, value: 'default' } },
       { tool: 'mock', params: { ...target, behavior: 'mockReturnValueOnce', value: 'once' } },

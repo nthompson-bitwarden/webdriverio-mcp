@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { getState } from '../../src/session/state';
-import { mockTool, mockToolDefinition, getMockCallsTool, manageMockTool } from '../../src/tools/mock.tool';
+import { mockTool, mockToolDefinition, getMockCallsTool, getMockCallsToolDefinition, manageMockTool, manageMockToolDefinition } from '../../src/tools/mock.tool';
 
 type TestTool = (args: Record<string, unknown>) => ReturnType<typeof mockTool>;
 const configure = mockTool as unknown as TestTool;
 const inspect = getMockCallsTool as unknown as TestTool;
 const manage = manageMockTool as unknown as TestTool;
-const target = { kind: 'electron', apiName: 'dialog', funcName: 'showOpenDialog' };
+const target = { mockType: 'electron', apiName: 'dialog', funcName: 'showOpenDialog' };
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: Error) => void;
@@ -41,34 +41,95 @@ describe('Electron mocks', () => {
     ['configure', configure, {}],
     ['inspect', inspect, {}],
     ['manage', manage, { action: 'restore' }],
-  ] as const)('rejects network %s without touching Electron mocks in any runtime', async (_name, tool, extra) => {
+  ] as const)('rejects browser %s without touching Electron mocks in any runtime', async (_name, tool, extra) => {
     const { create, mock } = session();
     await configure(target);
     for (const runtime of ['electron', 'webdriver'] as const) {
       getState().sessionMetadata.get('electron')!.runtime = runtime;
-      const result = await tool({ kind: 'network', ...extra });
+      const result = await tool({ mockType: 'browser', ...extra });
       expect(result.isError).toBe(true);
-      expect(result.content).toEqual([{ type: 'text', text: expect.stringContaining('Network mocking is not implemented yet') }]);
+      expect(result.content).toEqual([{ type: 'text', text: expect.stringContaining('Browser mocking is not implemented yet') }]);
     }
     expect(create).toHaveBeenCalledOnce();
     expect(mock.update).not.toHaveBeenCalled();
     expect(mock.mockRestore).not.toHaveBeenCalled();
   });
 
-  it('requires an explicit kind and a complete Electron target before service calls', async () => {
+  it('requires an explicit mockType and a complete Electron target before service calls', async () => {
     const { create } = session();
     for (const args of [
       { apiName: 'app', funcName: 'getName' },
-      { ...target, kind: 'unknown' },
-      { kind: 'electron' },
-      { kind: 'electron', apiName: 'app' },
-      { kind: 'electron', funcName: 'getName' },
+      { ...target, mockType: 'unknown' },
+      { mockType: 'electron' },
+      { mockType: 'electron', apiName: 'app' },
+      { mockType: 'electron', funcName: 'getName' },
     ]) {
       expect((await configure(args)).isError).toBe(true);
       expect((await inspect(args)).isError).toBe(true);
       expect((await manage({ ...args, action: 'restore' })).isError).toBe(true);
     }
     expect(create).not.toHaveBeenCalled();
+  });
+
+  describe.each([
+    ['configure', configure, {}],
+    ['inspect', inspect, {}],
+    ['manage', manage, { action: 'restore' }],
+  ] as const)('%s routing', (_name, tool, extra) => {
+    it.each([
+      ['webdriver', undefined, 'Browser mocking is not implemented yet'],
+      [undefined, undefined, 'Browser mocking is not implemented yet'],
+      ['webdriver', 'browser', 'Browser mocking is not implemented yet'],
+      [undefined, 'browser', 'Browser mocking is not implemented yet'],
+      ['webdriver', 'electron', 'requires an active Electron session'],
+      [undefined, 'electron', 'requires an active Electron session'],
+      ['electron', undefined, 'mockType is required'],
+      ['electron', 'browser', 'Browser mocking is not implemented yet'],
+    ] as const)('routes runtime %s and selector %s', async (runtime, mockType, message) => {
+      const { create } = session();
+      const browserMock = vi.fn();
+      getState().browsers.get('electron')!.mock = browserMock;
+      getState().sessionMetadata.get('electron')!.runtime = runtime;
+      const result = await tool({ ...target, mockType, ...extra });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: 'text', text: expect.stringContaining(message) }]);
+      expect(create).not.toHaveBeenCalled();
+      expect(browserMock).not.toHaveBeenCalled();
+    });
+
+    it.each(['ios', 'android'] as const)('rejects %s for every selector', async type => {
+      const { create } = session();
+      getState().sessionMetadata.get('electron')!.type = type;
+      for (const mockType of [undefined, 'browser', 'electron']) {
+        const result = await tool({ ...target, mockType, ...extra });
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([{ type: 'text', text: expect.stringContaining('unsupported for iOS/Android Appium') }]);
+      }
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it.each(['session', 'metadata', 'browser'])('rejects missing %s for every selector', async missing => {
+      const { create } = session();
+      if (missing === 'session') { getState().currentSession = null; }
+      if (missing === 'metadata') getState().sessionMetadata.clear();
+      if (missing === 'browser') getState().browsers.clear();
+      for (const mockType of [undefined, 'browser', 'electron']) {
+        const result = await tool({ ...target, mockType, ...extra });
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([{ type: 'text', text: expect.stringMatching(/session/i) }]);
+      }
+      expect(create).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([mockToolDefinition, getMockCallsToolDefinition, manageMockToolDefinition])('exposes optional mockType for $name', definition => {
+    const schema = z.object(definition.inputSchema);
+    expect(schema.safeParse({ action: 'restore' }).success).toBe(true);
+    expect(schema.safeParse({ mockType: 'browser', action: 'restore' }).success).toBe(true);
+    for (const mockType of ['network', 'unknown', null, 1]) {
+      expect(schema.safeParse({ mockType, action: 'restore' }).success).toBe(false);
+    }
+    expect(Object.keys(definition.inputSchema)).not.toContain('kind');
   });
 
   it('creates one handle and preserves once-value order for overlapping configurations', async () => {
@@ -131,7 +192,7 @@ describe('Electron mocks', () => {
     create.mockImplementationOnce(() => { started.resolve(); return creation.promise; });
     const pending = configure(target);
     await started.promise;
-    expect((await configure({ kind: 'electron', apiName: 'app', funcName: 'getName' })).isError).toBeUndefined();
+    expect((await configure({ mockType: 'electron', apiName: 'app', funcName: 'getName' })).isError).toBeUndefined();
     const replacement = session();
     expect((await configure(target)).isError).toBeUndefined();
     creation.resolve(mock);
@@ -234,9 +295,9 @@ describe('Electron mocks', () => {
   it('validates the public schema before accepting malformed targets or behavior', () => {
     const schema = z.object(mockToolDefinition.inputSchema);
     expect(schema.safeParse({ ...target, value: null }).success).toBe(true);
-    expect(schema.safeParse({ kind: 'network' }).success).toBe(true);
-    expect(schema.safeParse({ apiName: 'app', funcName: 'getName' }).success).toBe(false);
-    expect(schema.safeParse({ ...target, kind: 'unknown' }).success).toBe(false);
+    expect(schema.safeParse({ mockType: 'browser' }).success).toBe(true);
+    expect(schema.safeParse({ apiName: 'app', funcName: 'getName' }).success).toBe(true);
+    expect(schema.safeParse({ ...target, mockType: 'unknown' }).success).toBe(false);
     expect(schema.safeParse({ ...target, behavior: 'mockImplementation' }).success).toBe(false);
     expect(schema.safeParse({ ...target, apiName: '__proto__' }).success).toBe(false);
     expect(schema.safeParse({ ...target, funcName: '' }).success).toBe(false);
