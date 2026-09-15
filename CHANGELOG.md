@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.13.0](https://github.com/webdriverio/mcp/compare/v3.12.1...v3.13.0) (2026-09-15)
+
+### Features
+
+* **electron:** Add session-scoped API mocking tools ([#146](https://github.com/webdriverio/mcp/issues/146)) ([11bb1b5](https://github.com/webdriverio/mcp/commit/11bb1b560e72e6e93940a6f50cedafa4b82f32a1))
+
 ## [3.12.1](https://github.com/webdriverio/mcp/compare/v3.12.0...v3.12.1) (2026-09-12)
 
 ### Features
