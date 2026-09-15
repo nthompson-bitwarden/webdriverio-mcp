@@ -472,3 +472,61 @@ describe('generateCode - Electron', () => {
     expect(code).toContain('Recorded Electron deeplink must use "${electronDeeplinkScheme}:".');
   });
 });
+
+describe('generateCode - Electron mocks', () => {
+  it.each(['mock', 'get_mock_calls', 'manage_mock'].flatMap(tool => [undefined, 'browser', 'unknown'].map(mockType => ({ tool, mockType }))))('rejects recorded $tool with selector $mockType', async ({ tool, mockType }) => {
+    const history = makeHistory([{ tool, params: { mockType, action: 'restore' } }]);
+    history.runtime = 'electron';
+    history.steps[0].params = { platform: 'electron' };
+    const code = generateCode(history).replace(/^import .*;\n/m, '');
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    let cleaned = false;
+    let deleted = false;
+    await expect(new AsyncFunction('startWdioSession', 'cleanupWdioSession', code)(
+      async () => ({ deleteSession: async () => { deleted = true; } }),
+      async () => { cleaned = true; },
+    )).rejects.toThrow('Unsupported or missing recorded mockType');
+    expect(cleaned).toBe(true);
+    expect(deleted).toBe(true);
+  });
+
+  it('executes repeated configuration, inspection, reset, restore, and recreation in order', async () => {
+    const target = { mockType: 'electron', apiName: 'app', funcName: 'getName' };
+    const history = makeHistory([
+      { tool: 'mock', params: { ...target, value: 'default' } },
+      { tool: 'mock', params: { ...target, behavior: 'mockReturnValueOnce', value: 'once' } },
+      { tool: 'get_mock_calls', params: target },
+      { tool: 'manage_mock', params: { ...target, action: 'clear' } },
+      { tool: 'manage_mock', params: { ...target, action: 'reset' } },
+      { tool: 'manage_mock', params: { ...target, action: 'restore' } },
+      { tool: 'mock', params: target },
+    ]);
+    history.runtime = 'electron';
+    history.steps[0].params = { platform: 'electron' };
+    const events: unknown[] = [];
+    const mock = {
+      mockReturnValue: async (value: unknown) => { events.push(['return', value]); },
+      mockReturnValueOnce: async (value: unknown) => { events.push(['once', value]); },
+      update: async () => { events.push('update'); },
+      mockClear: async () => { events.push('clear'); },
+      mockReset: async () => { events.push('reset'); },
+      mockRestore: async () => { events.push('restore'); },
+      mock: { calls: [['argument']] },
+    };
+    const browser = {
+      electron: { mock: async (...args: unknown[]) => { events.push(args); return mock; } },
+      deleteSession: async () => { events.push('delete'); },
+    };
+    const code = generateCode(history).replace(/^import .*;\n/m, '');
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    await new AsyncFunction('startWdioSession', 'cleanupWdioSession', 'console', code)(
+      async () => browser,
+      async () => { events.push('cleanup'); },
+      { log: (value: unknown) => events.push(value) },
+    );
+    expect(events).toEqual([
+      ['app', 'getName'], ['return', 'default'], ['once', 'once'], 'update', [['argument']],
+      'clear', 'reset', 'restore', ['app', 'getName'], ['return', undefined], 'cleanup', 'delete',
+    ]);
+  });
+});

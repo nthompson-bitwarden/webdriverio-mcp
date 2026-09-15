@@ -291,6 +291,23 @@ function generateStep(step: RecordedStep, history: SessionHistory): string {
       const values = indentJson(p.args ?? []);
       return `await browser.electron.execute((electron, source, args) => new Function('electron', 'args', source)(electron, args), ${script}, ${values});`;
     }
+    case 'mock': {
+      if (p.mockType !== 'electron') return 'throw new Error("Unsupported or missing recorded mockType; only electron mocking is implemented.");';
+      const key = JSON.stringify(JSON.stringify([p.apiName, p.funcName]));
+      const behavior = JSON.stringify(p.behavior ?? 'mockReturnValue');
+      return `if (!electronMocks.has(${key})) electronMocks.set(${key}, await browser.electron.mock(${JSON.stringify(p.apiName)}, ${JSON.stringify(p.funcName)}));\nawait electronMocks.get(${key})[${behavior}](${JSON.stringify(p.value) ?? 'undefined'});`;
+    }
+    case 'get_mock_calls': {
+      if (p.mockType !== 'electron') return 'throw new Error("Unsupported or missing recorded mockType; only electron mocking is implemented.");';
+      const key = JSON.stringify(JSON.stringify([p.apiName, p.funcName]));
+      return `await electronMocks.get(${key}).update();\nconsole.log(electronMocks.get(${key}).mock.calls);`;
+    }
+    case 'manage_mock': {
+      if (p.mockType !== 'electron') return 'throw new Error("Unsupported or missing recorded mockType; only electron mocking is implemented.");';
+      const key = JSON.stringify(JSON.stringify([p.apiName, p.funcName]));
+      const method = { clear: 'mockClear', reset: 'mockReset', restore: 'mockRestore' }[String(p.action)];
+      return `await electronMocks.get(${key}).${method}();${p.action === 'restore' ? `\nelectronMocks.delete(${key});` : ''}`;
+    }
     case 'trigger_electron_deeplink': {
       const url = JSON.stringify(p.url);
       return [
@@ -360,6 +377,7 @@ export function generateCode(history: SessionHistory): string {
       '',
       `const electronDeeplinkScheme = ${JSON.stringify(deeplinkScheme)};`,
       '',
+      'const electronMocks = new Map();',
       'let browser;',
       'try {',
       steps,

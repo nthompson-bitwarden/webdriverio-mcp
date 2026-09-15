@@ -83,6 +83,7 @@ import { appStateTool, appStateToolDefinition } from './tools/app-state.tool';
 import { getCookiesTool, getCookiesToolDefinition } from './tools/get-cookies.tool';
 import { openWebExtensionTool, openWebExtensionToolDefinition } from './tools/web-extension.tool';
 import { executeElectronScriptTool, executeElectronScriptToolDefinition } from './tools/electron-execute.tool';
+import { mockTool, mockToolDefinition, getMockCallsTool, getMockCallsToolDefinition, manageMockTool, manageMockToolDefinition } from './tools/mock.tool';
 import { triggerElectronDeeplinkTool, triggerElectronDeeplinkToolDefinition } from './tools/electron-deeplink.tool';
 
 console.log = (...args) => console.error('[LOG]', ...args);
@@ -163,6 +164,9 @@ function createServer(): McpServer {
 
   registerTool(executeScriptToolDefinition, instrument('execute_script', executeScriptTool));
   registerTool(executeElectronScriptToolDefinition, instrument('execute_electron_script', executeElectronScriptTool));
+  registerTool(mockToolDefinition, instrument('mock', mockTool));
+  registerTool(getMockCallsToolDefinition, instrument('get_mock_calls', getMockCallsTool));
+  registerTool(manageMockToolDefinition, instrument('manage_mock', manageMockTool));
   registerTool(triggerElectronDeeplinkToolDefinition, instrument('trigger_electron_deeplink', triggerElectronDeeplinkTool));
   registerTool(getElementsToolDefinition, getElementsTool);
   registerTool(openWebExtensionToolDefinition, instrument('open_web_extension', openWebExtensionTool));
