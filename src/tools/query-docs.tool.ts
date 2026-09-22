@@ -1,0 +1,78 @@
+import { z } from 'zod';
+import type { ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { encode } from '@toon-format/toon';
+import type { ToolDefinition } from '../types/tool.js';
+import { coerceBoolean } from '../utils/zod-helpers';
+import { MCP_DEMOTE_FACTOR, MCP_PATH_PREFIX, capPageText, pageText, search } from '../utils/docs-index';
+import { loadDocsIndex } from '../utils/docs-client';
+
+const DEFAULT_LIMIT = 5;
+
+export const queryDocsToolDefinition: ToolDefinition = {
+  name: 'query_docs',
+  description: [
+    'Search the official WebdriverIO documentation and return the most relevant excerpts with page, section and source URL.',
+    'Use before answering any question about WebdriverIO APIs, configuration, services, reporters, selectors, or debugging.',
+    '',
+    'Query with 2-3 distinctive keywords, never a sentence: "appium setup", "devtools trace.zip" and "allure reporter" each return the right page first, while "how do I wire up appium in my config file" does not.',
+    'A word can also collide with an unrelated page — `wire` matches Wire Protocol — so if a query misses, retry with the exact page title, which beats any paraphrase.',
+    'Set fullPage for the whole page. To browse instead, read wdio://docs/index for every page title and its slug, then wdio://docs/page/{slug} for one page in full.',
+    '',
+    'Cite the `path` of any page you rely on.',
+  ].join('\n'),
+  inputSchema: {
+    query: z.string().describe('2-3 distinctive keywords: an API name, config key, page title or feature (e.g. "appium setup", "devtools trace.zip", "browserstack capabilities"). A sentence dilutes the ranking.'),
+    limit: z.number().int().min(1).max(20).optional().default(DEFAULT_LIMIT),
+    fullPage: coerceBoolean.optional().default(false).describe('Return the full matched pages instead of excerpts'),
+  },
+  annotations: { title: 'Query WebdriverIO Docs', readOnlyHint: true, idempotentHint: true },
+};
+
+type QueryDocsArgs = {
+  query: string;
+  limit?: number;
+  fullPage?: boolean;
+};
+
+export const queryDocsTool: ToolCallback = async (args: QueryDocsArgs) => {
+  const { query, limit = DEFAULT_LIMIT, fullPage } = args;
+  try {
+    const index = await loadDocsIndex();
+    // The dedup below runs after search's slice, so without over-fetching a page split into
+    // sibling chunks crowds out whole pages. ponytail: 10× over-fetch; raise only if a page
+    // with >10 sibling chunks starves real queries.
+    const candidates = fullPage ? Math.min(limit * 10, index.chunks.length) : limit;
+    const results = search(index, query, candidates, {
+      demotePathPrefix: MCP_PATH_PREFIX,
+      demoteFactor: MCP_DEMOTE_FACTOR,
+    });
+    const pages = new Map<number, string>();
+    if (fullPage) {
+      for (const page of new Set(results.map((hit) => hit.page))) {
+        pages.set(page, capPageText(pageText(index, page)));
+      }
+    }
+    // results are score-descending, so each page's first hit is its best one; without
+    // this a large page ships its capped body once per sibling chunk that co-ranks.
+    const seen = new Set<number>();
+    const hits = results
+      .filter((hit) => {
+        if (!fullPage || !seen.has(hit.page)) {
+          seen.add(hit.page);
+          return true;
+        }
+        return false;
+      })
+      .slice(0, limit)
+      .map((hit) => ({
+        title: hit.title,
+        trail: hit.trail,
+        path: hit.path,
+        score: Math.round(hit.score * 100) / 100,
+        excerpt: pages.get(hit.page) ?? hit.excerpt,
+      }));
+    return { content: [{ type: 'text' as const, text: encode({ query, hits }) }] };
+  } catch (e) {
+    return { isError: true as const, content: [{ type: 'text' as const, text: `Error: ${e}` }] };
+  }
+};

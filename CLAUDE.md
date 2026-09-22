@@ -17,9 +17,15 @@ npm run start:http  # Built server with HTTP transport (for browser-based MCP cl
 npx vitest run tests/tools/get-elements-tool.test.ts   # one file
 npx vitest run -t "filter pattern"                      # tests matching a name
 npx vitest tests/trace/                                 # watch mode for a directory
+
+# Type-check. Use the repo-pinned TypeScript, not bare `npx tsc` — that resolves a newer
+# build which rejects this repo's own tsconfig (moduleResolution=node10, baseUrl removed)
+# and reports TS5108/TS5102 instead of any real error.
+./node_modules/.bin/tsc --noEmit
 ```
 
-`vitest.config.ts` sets `environment: 'happy-dom'` and typechecks tests against `tsconfig.test.json`.
+`vitest.config.ts` sets `environment: 'happy-dom'`. Its `typecheck.tsconfig` names a `tsconfig.test.json`
+that is not in the repo, so `tsc --noEmit` — which covers `tests/` via the root `include` — is the real type gate.
 
 ## Architecture
 
@@ -38,32 +44,23 @@ src/
 │       ├── testingbot.provider.ts    # TestingBot (browser + mobile + Storage)
 │       └── digitalai.provider.ts     # Digital.ai Testing (browser + mobile; accessKey cap, deviceQuery)
 ├── trace/             # Playwright-compatible trace recording (recorder.ts, tool-mapping.ts, zip-writer.ts)
-├── tools/             # One file per MCP tool (see Tool Pattern below)
+├── tools/             # One file per MCP tool (see Tool Pattern below); includes the Electron
+│                       #   surface (electron-execute, electron-deeplink), mocking, and web extensions
 ├── resources/         # One file per MCP resource (see Recording below)
 ├── recording/         # step-recorder.ts (withRecording HOF) + code-generator.ts
 ├── scripts/           # Browser/mobile scripts executed via browser.execute() — no try/catch, raw data only
 ├── locators/          # Element detection, selector generation, XML parsing (mobile)
 ├── config/            # appium.config.ts — iOS/Android capability builders
-├── utils/             # parse-variables.ts, zod-helpers.ts (coerceBoolean)
+├── utils/             # auth.ts, parse-args.ts, http-helpers.ts, zod-helpers.ts (coerceBoolean),
+│                       #   docs-index.ts + docs-client.ts (docs corpus)
 └── types/             # ToolDefinition, ResourceDefinition, RecordedStep interfaces
 ```
 
 ### Session State
 
-Single active session model in `src/session/state.ts`:
-
-```typescript
-// Private state — access via getState() or getBrowser()
-export function getBrowser(): WebdriverIO.Browser { ... }
-export function getState() { return state; }
-export interface SessionMetadata {
-  type: 'browser' | 'ios' | 'android';
-  capabilities: Record<string, unknown>;
-  isAttached: boolean;
-  provider?: 'local' | 'browserstack' | 'saucelabs' | 'testmu' | 'testingbot' | 'digitalai';   // set at session start; used by lifecycle to call provider hooks
-  tunnelHandle?: unknown;                 // opaque handle returned by provider.startTunnel(), passed back to onSessionClose()
-}
-```
+Single active session model in `src/session/state.ts` — private state, read through `getBrowser()` or
+`getState()`. The `SessionMetadata` interface (type, capabilities, `isAttached`, `provider`, plus the
+provider-specific `region` / `tunnelName` / `tunnelHandle`) lives there; read it there rather than here.
 
 Session lifecycle managed via `src/session/lifecycle.ts`:
 - `registerSession()` — registers browser + metadata + history, handles transition sentinel; calls `provider.onSessionClose()` on orphaned sessions
@@ -72,7 +69,8 @@ Session lifecycle managed via `src/session/lifecycle.ts`:
 
 ### Tool Pattern
 
-All tools follow this structure:
+All tools follow this structure — one file per tool under `src/tools/`, registered in `server.ts`
+with `registerTool(myToolDefinition, myTool)`, or `withRecording('my_tool', myTool)` to record steps:
 
 ```typescript
 // 1. Definition with Zod schema
@@ -91,7 +89,7 @@ export const myTool: ToolCallback = async ({ param }: { param: string }) => {
     // ... implementation
     return { content: [{ type: 'text', text: `Result` }] };
   } catch (e) {
-    return { content: [{ type: 'text', text: `Error: ${e}` }] };
+    return { isError: true, content: [{ type: 'text', text: `Error: ${e}` }] };
   }
 };
 
@@ -112,18 +110,13 @@ MCP resources expose live session data — all at fixed URIs discoverable via Li
 - `wdio://session/{sessionId}/steps` — step log for any session (URI template)
 - `wdio://session/{sessionId}/code` — generated JS for any session (URI template)
 
-**Live page state (current session):**
-- `wdio://session/current/elements` — interactable elements (viewport-only; use `get_elements` tool with `inViewportOnly: false` for all)
-- `wdio://session/current/accessibility` — accessibility tree
-- `wdio://session/current/screenshot` — screenshot (base64)
-- `wdio://session/current/cookies` — browser cookies
-- `wdio://session/current/tabs` — open browser tabs
-- `wdio://session/current/contexts` — native/webview contexts (mobile)
-- `wdio://session/current/context` — currently active context (mobile)
-- `wdio://session/current/app-state` — mobile app state
-- `wdio://session/current/geolocation` — device geolocation
-- `wdio://session/current/capabilities` — resolved WebDriver capabilities for the active session
-- `wdio://session/current/logs` — crash logs + browser console logs for the current session
+**Live page state (current session):** `wdio://session/current/` + `elements`, `accessibility`,
+`screenshot`, `cookies`, `tabs`, `contexts`, `context`, `app-state`, `geolocation`, `capabilities`, `logs`.
+
+- `elements` is viewport-only — use the `get_elements` tool with `inViewportOnly: false` for all
+- `capabilities` are the *resolved* values the driver accepted, including provider defaults
+- `logs` mixes crash logs with console output for the current session
+- `contexts` / `context` / `app-state` are mobile-only
 
 **Cloud tunnel binaries** (download URL + daemon start command):
 - `wdio://browserstack/local-binary`
@@ -131,54 +124,83 @@ MCP resources expose live session data — all at fixed URIs discoverable via Li
 - `wdio://testmu/local-binary`
 - `wdio://testingbot/local-binary` (single cross-platform Java JAR, requires Java 11+)
 
+**WebdriverIO documentation:**
+- `wdio://docs/index` — every docs page: title, source path, slug
+- `wdio://docs/page/{slug}` — full markdown of one page (see Documentation Search below)
+
+### Documentation Search
+
+`query_docs` answers WebdriverIO API/config questions from the official docs corpus at
+`https://webdriver.io/llms-full.txt` without injecting it into context.
+
+- Fetched lazily, cached at `~/.wdio-mcp/llms-full.txt` with an `llms-full.meta.json` sidecar
+  (`etag` + `fetchedAt`). Within 24 h the cache is used as-is; past that a conditional `GET` reuses
+  the body on `304`. `WDIO_MCP_CACHE_DIR` relocates it (the tests rely on this).
+- **Mechanism is test-enforced; do not restate it here.** `tests/utils/docs-index.test.ts` guards
+  fence-aware chunking, one path per page, both `waitUntil` pages resolving apart, and `/docs/mcp/*`
+  staying out of the top 3 of a framework question. Weights and factors live beside their constants
+  in `src/utils/docs-index.ts`. Breaking any of them fails a test — read the test, not this file.
+- **What tests cannot enforce, and therefore stays:** the stopword list is derived **grammatically,
+  never by corpus frequency** — `i` looks like a content word on every frequency signal the index
+  has, so a df threshold cannot find it, and `before`/`after`/`on`/`is`/`until`/`set` are excluded
+  because they are WDIO API surface rather than English.
+- **Keyword queries are the supported form, and the tool description is the interface.** It names the
+  working examples, warns that a sentence dilutes ranking and that a word can collide with an
+  unrelated page (`wire` → Wire Protocol), and points at both resources. Ranking changes must be
+  reflected there — a mechanism the agent is not told about does not exist.
+- A rare-term idf gate and a coverage multiplier were both **measured and rejected**; don't re-propose
+  either without new measurements.
+- Registered without `withRecording` (session-independent).
+- The ranking tests read the live corpus from the `~/.wdio-mcp` cache via `docsCacheDir()` and
+  `it.skipIf` out when it is absent, so a local run needs a populated cache;
+  `.github/workflows/test.yml` curls the corpus before `pnpm test` so CI runs the gate. Upstream
+  corpus drift can fail these tests — accepted risk; refresh the pinned expectations (chunk bounds,
+  path count, EXPECTATIONS rows) in `tests/utils/docs-index.test.ts` when it happens.
+
 ### Build
 
-- **tsup** bundles `src/server.ts` → `lib/server.js` (ESM)
-- Shebang preserved for CLI execution
-- `zod` externalized
-- Two `bin` entries: `wdio-mcp` (the server) and `wdio-show-trace` (`src/show-trace.ts` — inspect a recorded trace)
+- **tsup** bundles `src/server.ts` → `lib/server.js` (ESM), shebang preserved. `zod` and
+  `@wdio/electron-service` are externalized — see `tsup.config.ts` for the current list.
+- Three `bin` entries: `wdio-mcp` and `mcp` (both `lib/server.js`), plus `wdio-show-trace`
+  (`lib/show-trace.js`, from `src/show-trace.ts`) — the bins point at `lib/`, so any of them needs
+  `npm run bundle` first.
 - Package subpath exports: `.` (server), `./snapshot` (`src/snapshot.ts`), `./trace` (`src/trace.ts`)
 
 ## Key Files
 
-| File                                               | Purpose                                       |
-|----------------------------------------------------|-----------------------------------------------|
-| `src/server.ts`                                    | MCP server init, tool + resource registration |
-| `src/session/state.ts`                             | Session state maps, `getBrowser()`, `getState()` |
-| `src/session/lifecycle.ts`                         | `registerSession()`, `closeSession()`, session transitions |
-| `src/providers/registry.ts`                        | `getProvider()` — routes to local or cloud provider |
-| `src/providers/types.ts`                           | `SessionProvider` interface — `startTunnel()`, `onSessionClose()` lifecycle hooks |
-| `src/providers/cloud/browserstack.provider.ts`     | BrowserStack provider — tunnel lifecycle + session result marking via `onSessionClose()` |
-| `src/providers/cloud/testingbot.provider.ts`       | TestingBot provider — `tb:options` caps, single hub, form-encoded `test[success]` result marking, JAR tunnel via `testingbot-tunnel-launcher` |
-| `src/providers/cloud/digitalai.provider.ts`        | Digital.ai provider — `digitalai:accessKey` (web) / `digitalai:options.accessKey` (mobile) caps, `<DIGITALAI_CLOUD_URL>/wd/hub`, mobile `deviceQuery`, `cloud:<id>` app refs; REST API via Bearer accessKey |
-| `src/tools/session.tool.ts`                        | `start_session` (browser + mobile), `close_session` |
-| `src/tools/get-elements.tool.ts`                   | `get_elements` — all elements with filtering + pagination |
-| `src/tools/cloud-provider.tool.ts`                 | `list_apps`, `upload_app` — generalized across BrowserStack / Sauce Labs / TestMu / TestingBot and Digital.ai (Digital.ai uses Bearer auth; registered in `server.ts`) |
-| `src/resources/`                                   | All MCP resource definitions (one per URI)    |
-| `src/scripts/get-interactable-browser-elements.ts` | Browser-context element detection             |
-| `src/locators/`                                    | Mobile element detection + locator generation |
-| `src/recording/step-recorder.ts`                   | `withRecording(toolName, cb)` HOF — wraps tools for step logging |
-| `src/recording/code-generator.ts`                  | Generates runnable WebdriverIO JS from `SessionHistory` |
-| `src/utils/zod-helpers.ts`                         | `coerceBoolean` for client interop            |
-| `tsup.config.ts`                                   | Build configuration                           |
+Only files whose purpose is not evident from the tree above.
+
+| File | Purpose |
+|------|---------|
+| `src/providers/types.ts` | `SessionProvider` interface — `startTunnel()`, `onSessionClose()` lifecycle hooks |
+| `src/providers/cloud/browserstack.provider.ts` | Tunnel lifecycle + session result marking via `onSessionClose()` |
+| `src/providers/cloud/testingbot.provider.ts` | `tb:options` caps, single hub, form-encoded `test[success]` result marking, JAR tunnel via `testingbot-tunnel-launcher` |
+| `src/providers/cloud/digitalai.provider.ts` | `digitalai:accessKey` (web) / `digitalai:options.accessKey` (mobile) caps, `<DIGITALAI_CLOUD_URL>/wd/hub`, mobile `deviceQuery`, `cloud:<id>` app refs; REST API via Bearer accessKey |
+| `src/tools/session.tool.ts` | `start_session` (browser + mobile), `close_session` |
+| `src/tools/get-elements.tool.ts` | `get_elements` — all elements with filtering + pagination |
+| `src/tools/cloud-provider.tool.ts` | `list_apps`, `upload_app` — generalized across BrowserStack / Sauce Labs / TestMu / TestingBot and Digital.ai (Bearer auth) |
+| `src/tools/query-docs.tool.ts` | `query_docs` — BM25 search over the WebdriverIO docs corpus |
+| `src/utils/docs-index.ts` | Docs corpus fetch/cache, fence-aware chunking, path alignment, 3-field BM25 index + search |
+| `src/utils/docs-client.ts` | Boundary layer for the docs corpus — resolves the cache dir and loads the index |
+| `src/resources/docs.resource.ts` | `wdio://docs/index` + `wdio://docs/page/{slug}` |
+| `src/scripts/get-interactable-browser-elements.ts` | Browser-context element detection |
+| `src/recording/code-generator.ts` | Generates runnable WebdriverIO JS from `SessionHistory` |
 
 ## Gotchas
 
 ### Dev Reload vs Reconnect
 
-`npm run dev` runs `tsx --watch` — code changes reload in-process. Only tool/resource **schema changes** (Zod definitions, new tools, parameter additions) require an MCP client reconnect to re-advertise capabilities. No need to rebundle or restart the dev server for implementation-only changes.
+`npm run dev` runs `tsx --watch` — code changes reload in-process, including ranking and search logic. Only tool/resource **schema changes** (Zod definitions, new tools, parameter additions) require an MCP client reconnect to re-advertise capabilities. Adding a resource counts even with no schema edit: the client caches the resource list at handshake, so new URIs stay invisible until reconnect. No need to rebundle or restart the dev server for implementation-only changes.
+
+### Package Manager Is pnpm
+
+`packageManager: pnpm@10.32.1` and only `pnpm-lock.yaml` at the root. The `npm run` scripts below work,
+but installing a dependency with `npm install` forks the lockfile — use `pnpm add`.
 
 ### Console Output
 
-All console methods redirect to stderr via `console.error`. Chrome writes to stdout which corrupts MCP stdio protocol.
-
-```typescript
-// In server.ts - do not remove
-console.log = (...args) => console.error('[LOG]', ...args);
-console.info = (...args) => console.error('[INFO]', ...args);
-console.warn = (...args) => console.error('[WARN]', ...args);
-console.debug = (...args) => console.error('[DEBUG]', ...args);
-```
+`server.ts` reassigns `console.log/info/warn/debug` to `console.error` with a level prefix — chrome writes to
+stdout, which corrupts the MCP stdio protocol. Do not remove those reassignments.
 
 ### Browser Scripts Must Be Self-Contained
 
@@ -204,20 +226,9 @@ Tools return errors as text content, never throw. Keeps MCP protocol stable:
 
 ```typescript
 catch (e) {
-  return { content: [{ type: 'text', text: `Error: ${e}` }] };
+  return { isError: true, content: [{ type: 'text', text: `Error: ${e}` }] };
 }
 ```
-
-## Adding New Tools
-
-1. Create `src/tools/my-tool.tool.ts`
-2. Export `myToolDefinition` (Zod schema) and `myTool` (ToolCallback)
-3. Import and register in `src/server.ts` using the `registerTool` helper:
-   ```typescript
-   import { myToolDefinition, myTool } from './tools/my-tool.tool';
-   registerTool(myToolDefinition, myTool);
-   ```
-   To wrap with recording: `registerTool(myToolDefinition, withRecording('my_tool', myTool));`
 
 ## Selector Syntax Reference
 
@@ -247,10 +258,10 @@ catch (e) {
 
 ## Planned Improvements
 
-See `docs/architecture/` for proposals:
+Unimplemented proposals only; shipped work is not listed here. See `docs/architecture/`:
 
-- `session-configuration-proposal.md` — Cloud provider pattern — BrowserStack, SauceLabs, TestMu, TestingBot, and Digital.ai implemented; `providers/registry.ts` + `providers/cloud/` is the extension point for new providers
-- `multi-session-proposal.md` — Parallel sessions for sub-agent coordination
-- `interaction-sequencing-proposal.md` — Sequencing model for tool interactions
-- `trace-recording-and-replay.md` — Playwright-compatible trace recording (implemented in `src/trace/`)
-- `trace-extraction-proposal.md` — Trace data extraction and analysis
+- `multi-session-proposal.md` — parallel sessions for sub-agent coordination
+- `interaction-sequencing-proposal.md` — sequencing model for tool interactions
+- `trace-extraction-proposal.md` — extracting trace data to a standalone package
+
+`providers/registry.ts` + `providers/cloud/` is the extension point for new cloud providers.
