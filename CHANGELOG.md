@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.14.0](https://github.com/webdriverio/mcp/compare/v3.13.0...v3.14.0) (2026-09-23)
+
+### Features
+
+* **docs:** Introduce query_docs tooling based on llms.txt on webdriver.io ([#152](https://github.com/webdriverio/mcp/issues/152)) ([541f55b](https://github.com/webdriverio/mcp/commit/541f55b12adfd86a6f0a605bd218a861a5acf018))
+* **mock:** introduce browser mocking tool for mcp sessions ([#153](https://github.com/webdriverio/mcp/issues/153)) ([47d5937](https://github.com/webdriverio/mcp/commit/47d5937ada7c28637f080b591c814f48e3904cf2))
+
 ## [3.13.0](https://github.com/webdriverio/mcp/compare/v3.12.1...v3.13.0) (2026-09-15)
 
 ### Features
